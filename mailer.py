@@ -39,6 +39,15 @@ class MailSender:
         """发件/目标/授权码均已填写才算配置完成。"""
         return bool(self._sender and self._auth_code and self._mail_to)
 
+    @staticmethod
+    def _mask(address: str) -> str:
+        """邮箱打码，日志里不出现完整地址。"""
+        address = address or ""
+        name, _, domain = address.partition("@")
+        if not domain:
+            return "***"
+        return f"{name[:2]}***@{domain}"
+
     async def send(self, subject: str, body: str) -> bool:
         """异步发送邮件，失败自动重试。
 
@@ -47,7 +56,11 @@ class MailSender:
         重试四次，网络恢复后告警仍能送达。
         """
         if not self.is_configured():
-            logger.warning("邮件配置不完整，跳过发送（sender=%s to=%s）", self._sender, self._mail_to)
+            logger.debug(
+                "邮件配置不完整，跳过发送（sender=%s to=%s）",
+                self._mask(self._sender),
+                self._mask(self._mail_to),
+            )
             return False
         delays = (0, 10, 30, 60)
         for attempt, delay in enumerate(delays):
@@ -76,5 +89,5 @@ class MailSender:
         with smtplib.SMTP_SSL(self._host, self._port, timeout=15) as server:
             server.login(self._sender, self._auth_code)
             server.sendmail(self._sender, [self._mail_to], msg.as_string())
-        logger.info("邮件已发送: %s -> %s", self._sender, self._mail_to)
+        logger.info("邮件已发送: %s -> %s", self._mask(self._sender), self._mask(self._mail_to))
         return True

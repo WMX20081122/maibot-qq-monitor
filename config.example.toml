@@ -1,6 +1,5 @@
 [plugin]
 enabled = true
-config_version = "1.0.0"
 
 [admin]
 # 管理员 QQ 号列表（可查记录）

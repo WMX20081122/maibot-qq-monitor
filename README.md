@@ -6,7 +6,7 @@
 
 [![MaiBot](https://img.shields.io/badge/MaiBot-1.3.x-00a66a?style=flat-square)](https://github.com/Mai-with-u/MaiBot)
 [![SDK](https://img.shields.io/badge/SDK-2.12%2B-2f5fff?style=flat-square)](https://github.com/Mai-with-u/MaiBot)
-[![Version](https://img.shields.io/badge/version-1.0.3-orange?style=flat-square)](#)
+[![Version](https://img.shields.io/badge/version-1.0.4-orange?style=flat-square)](#)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 
 </div>
@@ -150,6 +150,13 @@ QQ 掉线常常同时伴随本机网络异常。插件已内置 0 / 10 / 30 / 60
 > 📌 MaiBot 发布 1.4 后我们会跟进测试并更新兼容区间。
 
 ## 📝 更新日志
+
+**v1.0.4**
+
+- 判定状态持久化（`monitor_state.json`）：重启后若本来就掉线，不再重复发一封掉线邮件
+- 适配器整体不可用（`未找到 API 提供方插件`）不再被当成接口卡顿，立即判定掉线并告警
+- 邮件日志对收发件地址打码，配置不完整的提示降到 debug
+- 删掉 `message_info.self_id` 这段已失效的兜底分支；示例配置不再手写 `config_version`
 
 **v1.0.3**
 

@@ -25,7 +25,7 @@ from maibot_sdk.types import HookMode
 from . import config as cfg_mod
 from .mailer import MailSender
 
-__version__ = "1.0.3"
+__version__ = "1.0.4"
 
 logger = logging.getLogger("plugin.WMX20081122.maibot-qq-monitor")
 
@@ -97,6 +97,9 @@ HARD_OFFLINE_MARKERS = (
     "connection refused",
     "拒绝网络连接",
     "cannot connect",
+    "未找到 api 提供方",
+    "api provider",
+    "api 提供方插件",
 )
 
 
@@ -135,6 +138,7 @@ class QQMonitorPlugin(MaiBotPlugin):
         self._records_file = self._resolve_records_file()
         self._records_file.parent.mkdir(parents=True, exist_ok=True)
         self._load_records()
+        self._load_state()
         cfg = self.config
         m = cfg.mail
         self._mailer = MailSender(
@@ -374,6 +378,38 @@ class QQMonitorPlugin(MaiBotPlugin):
         if len(self._records) > max_records:
             self._records = self._records[-max_records:]
         self._save_records()
+        self._save_state()
+
+    def _state_file(self) -> Path:
+        return self._records_file.with_name("monitor_state.json")
+
+    def _load_state(self) -> None:
+        """恢复上次判定的在线状态：重启时若本来就掉线，不再重复发一封掉线邮件。"""
+        try:
+            raw = json.loads(self._state_file().read_text(encoding="utf-8"))
+        except Exception:
+            return
+        online = raw.get("online") if isinstance(raw, dict) else None
+        if isinstance(online, bool):
+            self._online = online
+            logger.info("恢复上次在线状态：%s", "在线" if online else "掉线")
+
+    def _save_state(self) -> None:
+        if self._online is None:
+            return
+        try:
+            self._state_file().write_text(
+                json.dumps(
+                    {
+                        "online": self._online,
+                        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+        except Exception:
+            logger.debug("保存在线状态失败", exc_info=True)
 
     async def _handle_event(self, evt: str, notify_mail: bool) -> None:
         """记录事件并按「每次状态翻转一封」直接发邮件（翻转已由阈值防抖）。"""
@@ -442,8 +478,7 @@ class QQMonitorPlugin(MaiBotPlugin):
             sid = msg.get("account_id")
             if not sid:
                 mi = msg.get("message_info") or {}
-                ac = mi.get("additional_config") or {}
-                sid = mi.get("self_id") or ac.get("self_id")
+                sid = (mi.get("additional_config") or {}).get("self_id")
             if sid:
                 self._cached_self_id = str(sid).strip()
         except Exception:
