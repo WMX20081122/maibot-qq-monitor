@@ -1,0 +1,44 @@
+[plugin]
+enabled = true
+config_version = "1.0.0"
+
+[admin]
+# 管理员 QQ 号列表（可查记录）
+superusers = []
+# 机器人昵称（用于邮件与记录标识）
+nickname = []
+
+[mail]
+# 邮件通知配置（QQ 邮箱 SMTP）
+mail_enable = true
+smtp_host = "smtp.qq.com"
+smtp_port = 465
+# 发件邮箱（需在 QQ 邮箱开启 SMTP 并生成授权码）
+mail_sender = ""
+# SMTP 授权码（非登录密码）
+mail_auth_code = ""
+# 目标接收邮箱
+mail_to = ""
+mail_subject_prefix = "【QQ在线监控】"
+
+[monitor]
+# 正常状态下每 10 秒探测一次（本地 API，开销很低）
+probe_interval = 10
+# 疑似掉线/已掉线时改用短间隔复检，加快确认与恢复
+probe_retry_interval = 10
+# 连续 N 次「模糊失败」（超时等）才判定掉线；明确未连接时立即判定
+probe_fail_threshold = 2
+# 连续 N 次探测成功才判定恢复上线（防止连接抖动反复触发）
+recover_success_threshold = 2
+# N 秒内收到过消息则不判掉线（防误报；明确断开信号不受此限制）
+grace_seconds = 30
+# 每次重启 MaiBot 探测到在线时发送「上线」邮件，觉得吵可改 false
+notify_on_load = true
+# 本地最多保留记录条数
+record_max = 50
+
+[command]
+# 群聊/私聊发送以下指令查看登录/掉线记录（修改后需重载插件）
+ps_command = ["在线状态", "上下线记录"]
+# 仅管理员可用查看命令
+ps_only_su = true

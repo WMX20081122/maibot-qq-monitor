@@ -1,0 +1,51 @@
+{
+  "manifest_version": 2,
+  "id": "WMX20081122.maibot-qq-monitor",
+  "version": "1.0.0",
+  "name": "QQ在线监控",
+  "description": "监测机器人 QQ 上线/掉线状态：状态翻转时通过 QQ 邮箱 SMTP 发送邮件通知，群聊/私聊发送「在线状态」可查看最新登录与掉线记录。",
+  "author": {
+    "name": "WMX20081122",
+    "url": "https://github.com/WMX20081122"
+  },
+  "license": "MIT",
+  "urls": {
+    "repository": "https://github.com/WMX20081122/maibot-qq-monitor",
+    "homepage": "https://github.com/WMX20081122/maibot-qq-monitor",
+    "documentation": "https://github.com/WMX20081122/maibot-qq-monitor/blob/main/README.md",
+    "issues": "https://github.com/WMX20081122/maibot-qq-monitor/issues"
+  },
+  "host_application": {
+    "min_version": "1.0.0",
+    "max_version": "1.99.99"
+  },
+  "sdk": {
+    "min_version": "2.0.0",
+    "max_version": "2.99.99"
+  },
+  "dependencies": [
+    {
+      "type": "plugin",
+      "id": "maibot-team.snowluma-adapter",
+      "version_spec": ">=0.1.0"
+    }
+  ],
+  "capabilities": [
+    "api.call",
+    "send.text"
+  ],
+  "i18n": {
+    "default_locale": "zh-CN",
+    "supported_locales": [
+      "zh-CN"
+    ]
+  },
+  "plugin_type": "tool",
+  "display": {
+    "icon": {
+      "type": "emoji",
+      "value": "🛰️",
+      "background": "#00a66a"
+    }
+  }
+}
