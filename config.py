@@ -216,7 +216,7 @@ class CommandSection(PluginConfigBase):
     __ui_order__: ClassVar[int] = 4
 
     ps_command: List[str] = Field(
-        default_factory=lambda: ["在线状态"],
+        default_factory=lambda: ["在线状态", "上下线记录"],
         description="查看登录/掉线记录的触发指令。",
         json_schema_extra={
             "hint": "群聊或私聊发送该指令即可查看记录。",

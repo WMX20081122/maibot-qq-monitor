@@ -4,9 +4,9 @@
 
 **掉线第一时间知道 —— 状态翻转自动发邮件，指令随时查历史**
 
-[![MaiBot](https://img.shields.io/badge/MaiBot-1.0.0%2B-00a66a?style=flat-square)](https://github.com/Mai-with-u/MaiBot)
-[![SDK](https://img.shields.io/badge/SDK-2.x-2f5fff?style=flat-square)](https://github.com/Mai-with-u/MaiBot)
-[![Version](https://img.shields.io/badge/version-1.0.1-orange?style=flat-square)](#)
+[![MaiBot](https://img.shields.io/badge/MaiBot-1.3.x-00a66a?style=flat-square)](https://github.com/Mai-with-u/MaiBot)
+[![SDK](https://img.shields.io/badge/SDK-2.12%2B-2f5fff?style=flat-square)](https://github.com/Mai-with-u/MaiBot)
+[![Version](https://img.shields.io/badge/version-1.0.2-orange?style=flat-square)](#)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 
 </div>
@@ -148,6 +148,14 @@ QQ 掉线常常同时伴随本机网络异常。插件已内置 0 / 10 / 30 / 60
 - 无需安装第三方 Python 包
 
 ## 📝 更新日志
+
+**v1.0.2**
+
+- WebUI 里关闭插件后再打开即刻恢复探测，不再需要重载插件
+- 卸载时取消未完成的邮件重试任务，避免重载后残留 pending task 告警
+- 统一触发指令默认值（插件内默认与 README / 示例配置一致）
+- 发送者识别改用文档承诺的 `message.message_base_info` 字段，保留旧字段回退
+- 版本区间声明收紧为 MaiBot 1.3.x + SDK 2.12.0（MaiBot 1.4 发布后会跟进测试与更新）
 
 **v1.0.1**
 

@@ -33,7 +33,11 @@ DEFAULT_COMMANDS = ["在线状态", "上下线记录"]
 
 
 def _load_configured_commands() -> List[str]:
-    """读取配置中的查看指令；@Command 正则在导入期求值，故直接解析 config.toml。"""
+    """读取配置中的查看指令。
+
+    @Command 的正则在模块导入期求值，此时 SDK 配置对象尚未注入，只能直接
+    读插件目录的 config.toml；读不到就用默认值，不影响其他功能。
+    """
     try:
         with (Path(__file__).resolve().parent / "config.toml").open("rb") as fp:
             raw = tomllib.load(fp)
@@ -157,21 +161,36 @@ class QQMonitorPlugin(MaiBotPlugin):
         if self._probe_task is not None:
             self._probe_task.cancel()
             self._probe_task = None
+        for task in list(self._mail_tasks):
+            task.cancel()
+        if self._mail_tasks:
+            await asyncio.gather(*self._mail_tasks, return_exceptions=True)
         self._save_records()
         logger.info("QQ在线监控已卸载")
 
     async def on_config_update(self, scope: str, config_data: dict, version: str) -> None:
-        if scope == "self":
-            m = self.config.mail
-            self._mailer = MailSender(
-                smtp_host=m.smtp_host,
-                smtp_port=m.smtp_port,
-                sender=m.mail_sender,
-                auth_code=m.mail_auth_code,
-                mail_to=m.mail_to,
-                subject_prefix=m.mail_subject_prefix,
-            )
-            logger.info("QQ在线监控配置已更新(%s)", version)
+        if scope != "self":
+            return
+        m = self.config.mail
+        self._mailer = MailSender(
+            smtp_host=m.smtp_host,
+            smtp_port=m.smtp_port,
+            sender=m.mail_sender,
+            auth_code=m.mail_auth_code,
+            mail_to=m.mail_to,
+            subject_prefix=m.mail_subject_prefix,
+        )
+        # WebUI 里开关切换即时生效：关闭停探测，重新打开无需重载插件
+        if self.config.plugin.enabled:
+            if self._probe_task is None or self._probe_task.done():
+                self._last_activity = time.time()
+                self._probe_task = asyncio.create_task(self._probe_loop())
+                logger.info("QQ在线监控已启用，启动探测循环")
+        elif self._probe_task is not None:
+            self._probe_task.cancel()
+            self._probe_task = None
+            logger.info("QQ在线监控已禁用，停止探测循环")
+        logger.info("QQ在线监控配置已更新(%s)", version)
 
     # ---- 探测与状态机 ----
 
@@ -430,6 +449,21 @@ class QQMonitorPlugin(MaiBotPlugin):
 
     # ---- 命令：查看记录 ----
 
+    @staticmethod
+    def _extract_sender_id(kwargs: dict) -> str:
+        """取发送者 ID：优先命令参数里的 ``user_id``，再回退 ``message`` 报文。"""
+        sender = str(kwargs.get("user_id") or "").strip()
+        if sender:
+            return sender
+        message = kwargs.get("message")
+        if not isinstance(message, dict):
+            return ""
+        info = message.get("message_info") or {}
+        user_info = info.get("user_info") if isinstance(info, dict) else None
+        if isinstance(user_info, dict):
+            return str(user_info.get("user_id") or "").strip()
+        return ""
+
     @Command(
         "在线状态",
         description="查看最新登录/掉线记录",
@@ -442,14 +476,7 @@ class QQMonitorPlugin(MaiBotPlugin):
             await self.ctx.send.text("QQ在线监控当前已禁用", stream_id)
             return True, None, 0
 
-        sender_id = ""
-        mbi = kwargs.get("message_base_info") or {}
-        if isinstance(mbi, dict):
-            ui = mbi.get("user_info") or {}
-            if isinstance(ui, dict):
-                sender_id = str(ui.get("user_id") or "")
-        if not sender_id:
-            sender_id = str(kwargs.get("user_id") or "")
+        sender_id = self._extract_sender_id(kwargs)
 
         if self.config.command.ps_only_su:
             su = set(str(x).strip() for x in self.config.admin.superusers)
