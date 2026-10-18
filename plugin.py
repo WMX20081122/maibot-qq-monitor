@@ -25,7 +25,7 @@ from maibot_sdk.types import HookMode
 from . import config as cfg_mod
 from .mailer import MailSender
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 logger = logging.getLogger("plugin.WMX20081122.maibot-qq-monitor")
 
@@ -77,6 +77,13 @@ def _status_verdict(result: Any) -> bool | None:
     return None
 
 
+def _describe_exc(exc: BaseException) -> str:
+    """异常摘要：超时等异常的 str() 为空，这里补上类型名便于排查。"""
+    text = str(exc).strip()
+    name = type(exc).__name__
+    return f"{name}: {text}" if text else name
+
+
 HARD_OFFLINE_MARKERS = (
     "not connected",
     "not_connected",
@@ -108,6 +115,8 @@ class QQMonitorPlugin(MaiBotPlugin):
         self._last_activity: float = 0.0
         self._fail_count: int = 0
         self._success_count: int = 0
+        self._fail_since: float = 0.0
+        self._recover_since: float = 0.0
         self._records: List[dict] = []
         self._records_file: Path = Path(__file__).resolve().parent / "data" / "monitor_records.json"
         self._mailer: MailSender | None = None
@@ -173,17 +182,18 @@ class QQMonitorPlugin(MaiBotPlugin):
         掉线时适配器也可能返回错误包装 dict，必须做语义校验。
         """
         self._last_probe_detail: str = ""
+        timeout = max(int(self.config.monitor.probe_timeout), 3)
         hard_offline = False
         for api_name, check in (
             ("adapter.napcat.system.get_status", _status_verdict),
             ("adapter.napcat.system.get_login_info", _login_info_is_online),
         ):
             try:
-                result = await asyncio.wait_for(self.ctx.api.call(api_name), timeout=5)
+                result = await asyncio.wait_for(self.ctx.api.call(api_name), timeout=timeout)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                self._last_probe_detail = f"{api_name} -> 异常: {exc}"
+                self._last_probe_detail = f"{api_name} -> {_describe_exc(exc)}"
                 if _is_hard_offline_signal(exc):
                     hard_offline = True
                 continue
@@ -210,6 +220,26 @@ class QQMonitorPlugin(MaiBotPlugin):
         if self_id:
             self._cached_self_id = self_id
 
+    async def _napcat_port_reachable(self) -> bool:
+        """直接连 NapCat HTTP 端口：可达说明只是调用通道卡顿，不是真掉线。"""
+        m = self.config.monitor
+        port = int(m.http_probe_port or 0)
+        if port <= 0:
+            return False
+        try:
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection(m.http_probe_host or "127.0.0.1", port),
+                timeout=2,
+            )
+        except Exception:
+            return False
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except Exception:
+            pass
+        return True
+
     async def _probe_loop(self) -> None:
         delay = 0.0  # 首轮立即探测，尽快确定初始状态
         while True:
@@ -220,6 +250,8 @@ class QQMonitorPlugin(MaiBotPlugin):
             threshold = max(int(cfg.monitor.probe_fail_threshold), 1)
             recover_threshold = max(int(cfg.monitor.recover_success_threshold), 1)
             grace = max(float(cfg.monitor.grace_seconds), 5)
+            offline_confirm = max(int(cfg.monitor.offline_confirm_seconds), 0)
+            recover_confirm = max(int(cfg.monitor.recover_confirm_seconds), 0)
             await asyncio.sleep(delay)
             if not cfg.plugin.enabled:
                 delay = interval
@@ -233,32 +265,38 @@ class QQMonitorPlugin(MaiBotPlugin):
                 delay = retry_interval
                 continue
 
+            now = time.time()
             if online:
                 self._fail_count = 0
-                if self._online is False:
-                    # 掉线后恢复：需连续成功若干次才确认上线（防抖动）
-                    self._success_count += 1
-                    if self._success_count >= recover_threshold:
-                        self._success_count = 0
-                        self._online = True
-                        delay = interval
-                        logger.info("连续 %d 次探测成功，判定恢复上线，发送上线通知", recover_threshold)
-                        await self._handle_event("online", notify_mail=True)
-                    else:
-                        delay = retry_interval  # 仍在掉线态，短间隔复检
-                elif self._online is None:
-                    # 首次探测成功：确认在线
+                self._fail_since = 0.0
+                if self._online is True:
+                    self._success_count = 0
+                    self._recover_since = 0.0
+                    delay = interval
+                    continue
+                # 首次判定与掉线恢复共用同一套「稳定多久才算数」的确认逻辑
+                if self._recover_since <= 0:
+                    self._recover_since = now
+                self._success_count += 1
+                stable = now - self._recover_since
+                if self._success_count >= recover_threshold and stable >= recover_confirm:
+                    first = self._online is None
+                    self._success_count = 0
+                    self._recover_since = 0.0
                     self._online = True
                     delay = interval
-                    if cfg.monitor.notify_on_load:
-                        await self._handle_event("online", notify_mail=True)
-                    else:
+                    if first and not cfg.monitor.notify_on_load:
                         self._record_event("online")
+                    else:
+                        if not first:
+                            logger.info("稳定 %d 秒探测成功，判定恢复上线，发送上线通知", int(stable))
+                        await self._handle_event("online", notify_mail=True)
                 else:
-                    delay = interval
+                    delay = retry_interval  # 仍在确认期，短间隔复检
             else:
                 self._success_count = 0
-                idle_for = time.time() - self._last_activity
+                self._recover_since = 0.0
+                idle_for = now - self._last_activity
                 # 宽限期仅对「模糊失败」生效；明确断开说明连接已断，不必再等
                 if not hard_offline and self._online is not False and idle_for < grace:
                     logger.info(
@@ -267,27 +305,38 @@ class QQMonitorPlugin(MaiBotPlugin):
                         self._last_probe_detail,
                     )
                     self._fail_count = 0
+                    self._fail_since = 0.0
                     delay = retry_interval
                     continue
+                if self._fail_since <= 0:
+                    self._fail_since = now
                 self._fail_count += 1
-                # 明确断开信号在非掉线态立即判定，无需凑满阈值
                 immediate = hard_offline and self._online is not False
-                should_notify = immediate or self._fail_count >= threshold
-                # 已判定掉线后的持续失败降为 debug，避免灌满日志
+                persisted = now - self._fail_since
+                should_notify = immediate or (self._fail_count >= threshold and persisted >= offline_confirm)
                 notifying = should_notify and self._online is not False
                 log_failure = logger.info if notifying or self._fail_count <= threshold else logger.debug
                 log_failure(
-                    "探测失败，累计 %d/%d。详情: %s",
+                    "探测失败，累计 %d/%d（已持续 %.0f 秒）。详情: %s",
                     self._fail_count,
                     threshold,
+                    persisted,
                     self._last_probe_detail,
                 )
-                if should_notify and self._online is not False:
+                if notifying:
+                    # 判定前再确认 NapCat 端口：接口卡顿不该被当成掉线
+                    if not immediate and await self._napcat_port_reachable():
+                        logger.info("二次校验：NapCat 端口可达，判定为调用通道抖动，暂不发掉线通知")
+                        self._fail_count = 0
+                        self._fail_since = 0.0
+                        delay = interval
+                        continue
                     self._online = False
                     logger.warning("判定掉线，发送掉线通知。探测详情: %s", self._last_probe_detail)
                     await self._handle_event("offline", notify_mail=True)
                 # 掉线态与疑似掉线态都用短间隔复检，尽快确认与恢复
                 delay = retry_interval
+
 
     # ---- 事件处理 ----
 

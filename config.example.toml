@@ -26,12 +26,21 @@ mail_subject_prefix = "【QQ在线监控】"
 probe_interval = 10
 # 疑似掉线/已掉线时改用短间隔复检，加快确认与恢复
 probe_retry_interval = 10
-# 连续 N 次「模糊失败」（超时等）才判定掉线；明确未连接时立即判定
-probe_fail_threshold = 2
-# 连续 N 次探测成功才判定恢复上线（防止连接抖动反复触发）
-recover_success_threshold = 2
+# 单次接口调用超时：机器繁忙时接口会变慢，超时太短会把「慢」当成「掉线」
+probe_timeout = 10
+# 连续 N 次失败才进入掉线候选
+probe_fail_threshold = 3
+# 失败持续 N 秒才确认掉线并通知（短暂抖动不再成对发「掉线+上线」邮件）
+offline_confirm_seconds = 60
+# 连续 N 次成功才判定恢复上线，且需稳定 N 秒
+recover_success_threshold = 3
+recover_confirm_seconds = 20
 # N 秒内收到过消息则不判掉线（防误报；明确断开信号不受此限制）
 grace_seconds = 30
+# 判定掉线前的二次校验：直接连 NapCat HTTP 端口，可达说明只是调用卡顿
+# 填 NapCat 的 HTTP 端口（常见 2000 / 3000），填 0 关闭此校验
+http_probe_host = "127.0.0.1"
+http_probe_port = 2000
 # 每次重启 MaiBot 探测到在线时发送「上线」邮件，觉得吵可改 false
 notify_on_load = true
 # 本地最多保留记录条数

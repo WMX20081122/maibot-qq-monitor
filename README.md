@@ -6,7 +6,7 @@
 
 [![MaiBot](https://img.shields.io/badge/MaiBot-1.0.0%2B-00a66a?style=flat-square)](https://github.com/Mai-with-u/MaiBot)
 [![SDK](https://img.shields.io/badge/SDK-2.x-2f5fff?style=flat-square)](https://github.com/Mai-with-u/MaiBot)
-[![Version](https://img.shields.io/badge/version-1.0.0-orange?style=flat-square)](#)
+[![Version](https://img.shields.io/badge/version-1.0.1-orange?style=flat-square)](#)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 
 </div>
@@ -92,9 +92,13 @@ mail_to = "接收通知的邮箱@qq.com"
 | `mail.mail_subject_prefix` | `【QQ在线监控】` | 邮件标题前缀 |
 | `monitor.probe_interval` | `10` | 正常状态下的探测间隔（秒） |
 | `monitor.probe_retry_interval` | `10` | 疑似掉线后的复检间隔（秒） |
-| `monitor.probe_fail_threshold` | `2` | 连续失败几次判定掉线 |
-| `monitor.recover_success_threshold` | `2` | 连续成功几次判定恢复上线 |
+| `monitor.probe_timeout` | `10` | 单次接口调用超时（秒），机器繁忙时不要设太小 |
+| `monitor.probe_fail_threshold` | `3` | 连续失败几次进入掉线候选 |
+| `monitor.offline_confirm_seconds` | `60` | 失败持续多少秒才确认掉线并发通知 |
+| `monitor.recover_success_threshold` | `3` | 连续成功几次才判定恢复上线 |
+| `monitor.recover_confirm_seconds` | `20` | 成功持续多少秒才确认恢复上线 |
 | `monitor.grace_seconds` | `30` | 收到消息后 N 秒内不判掉线 |
+| `monitor.http_probe_host` / `http_probe_port` | `127.0.0.1` / `0` | 掉线前二次校验 NapCat 端口，填 0 关闭 |
 | `monitor.notify_on_load` | `true` | 重启后探测到在线是否发上线邮件 |
 | `monitor.record_max` | `50` | 本地最多保留记录条数 |
 | `command.ps_command` | `["在线状态","上下线记录"]` | 查询指令（修改后需重载） |
@@ -124,6 +128,13 @@ QQ 掉线常常同时伴随本机网络异常。插件已内置 0 / 10 / 30 / 60
 </details>
 
 <details>
+<summary>为什么会收到「掉线」紧跟着「上线」的成对邮件？</summary>
+
+主机繁忙时，适配器接口调用可能短暂超时，而不是 QQ 真的掉线。1.0.1 起加了三重保护：调用超时放宽到 10 秒、失败必须**持续 60 秒**才算掉线、判定前再确认 NapCat 端口是否可达。仍嫌敏感可以继续调大 `monitor.offline_confirm_seconds`。
+
+</details>
+
+<details>
 <summary>记录数据保存在哪？</summary>
 
 保存在 MaiBot 运行时分配给插件的数据目录（`monitor_records.json`），卸载/更新插件不会丢失；旧版本写在插件目录下的 `data/` 里，会按需自动迁移。
@@ -135,6 +146,19 @@ QQ 掉线常常同时伴随本机网络异常。插件已内置 0 / 10 / 30 / 60
 - MaiBot ≥ 1.0.0，插件 SDK 2.x
 - 适配器插件 [`maibot-team.snowluma-adapter`](https://github.com/Mai-with-u/MaiBot-SnowLuma-Adapter)（通过 `ctx.api.call` 访问 NapCat 接口）
 - 无需安装第三方 Python 包
+
+## 📝 更新日志
+
+**v1.0.1**
+
+- 修复误报：接口调用超时不再被当成掉线（超时放宽到 10 秒、失败需持续 60 秒）
+- 新增二次校验：判定掉线前连接 NapCat HTTP 端口，可达则视为调用通道抖动
+- 新增 `offline_confirm_seconds` / `recover_confirm_seconds` / `probe_timeout` 等配置
+- 日志中的异常改为带类型名输出，便于排查
+
+**v1.0.0**
+
+- 首个版本：上下线探测、SMTP 邮件通知、记录查询
 
 ## 📄 许可证
 

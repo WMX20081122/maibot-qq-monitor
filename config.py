@@ -125,25 +125,50 @@ class MonitorSection(PluginConfigBase):
             "step": 1,
         },
     )
-    probe_fail_threshold: int = Field(
-        default=2, ge=1,
-        description="连续探测失败多少次判定为掉线。",
+    probe_timeout: int = Field(
+        default=10, ge=3,
+        description="单次接口调用的超时时间（秒）。",
         json_schema_extra={
-            "hint": "仅用于模糊失败（超时等）；NapCat 明确未连接时会立即判定，不等阈值。",
-            "label": "掉线判定阈值",
+            "hint": "主机繁忙时接口偶发响应变慢，超时设太短会把「慢」误判成「掉线」。",
+            "label": "调用超时(s)",
             "order": 2,
             "step": 1,
         },
     )
+    probe_fail_threshold: int = Field(
+        default=3, ge=1,
+        description="连续探测失败多少次才进入掉线候选。",
+        json_schema_extra={
+            "hint": "仅用于模糊失败（超时等）；NapCat 明确未连接时会立即判定，不等阈值。",
+            "label": "掉线判定阈值",
+            "order": 3,
+            "step": 1,
+        },
+    )
+    offline_confirm_seconds: int = Field(
+        default=60, ge=0,
+        description="持续失败多少秒才确认掉线并发送通知（秒）。",
+        json_schema_extra={
+            "hint": "与阈值同时满足才通知；短暂抖动（例如 30 秒内恢复）不会再发「掉线+上线」成对邮件。",
+            "label": "掉线确认时长(s)",
+            "order": 4,
+            "step": 10,
+        },
+    )
     recover_success_threshold: int = Field(
-        default=2, ge=1,
+        default=3, ge=1,
         description="连续探测成功多少次才判定恢复上线。",
         json_schema_extra={
             "hint": "与掉线判定对称，防止连接抖动时反复触发上线。",
             "label": "上线确认阈值",
-            "order": 3,
+            "order": 5,
             "step": 1,
         },
+    )
+    recover_confirm_seconds: int = Field(
+        default=20, ge=0,
+        description="持续成功多少秒才确认恢复上线（秒）。",
+        json_schema_extra={"hint": "恢复通知同样需要一段稳定期，避免「上线又掉线」反复。", "label": "上线确认时长(s)", "order": 6, "step": 5},
     )
     grace_seconds: int = Field(
         default=30, ge=5,
@@ -151,8 +176,23 @@ class MonitorSection(PluginConfigBase):
         json_schema_extra={
             "hint": "此时间内探测失败不判掉线（有消息说明机器人仍在线）；明确断开信号不受宽限期影响。",
             "label": "消息宽限期(s)",
-            "order": 4,
+            "order": 7,
             "step": 5,
+        },
+    )
+    http_probe_host: str = Field(
+        default="127.0.0.1",
+        description="二次校验用的 NapCat HTTP 主机。",
+        json_schema_extra={"hint": "仅在端口非 0 时生效，与 NapCat 同机时保持默认即可。", "label": "校验主机", "order": 8},
+    )
+    http_probe_port: int = Field(
+        default=0, ge=0, le=65535,
+        description="NapCat HTTP 端口，0 表示关闭二次校验。",
+        json_schema_extra={
+            "hint": "填 NapCat 的 HTTP 端口（如 2000）：判定掉线前先确认端口仍可连接，能挡住「接口卡顿」类误报。",
+            "label": "校验端口",
+            "order": 9,
+            "step": 1,
         },
     )
     notify_on_load: bool = Field(
@@ -161,13 +201,13 @@ class MonitorSection(PluginConfigBase):
         json_schema_extra={
             "hint": "每次重启 MaiBot 都会触发一次上线通知，若觉得吵可关闭。",
             "label": "启动发上线通知",
-            "order": 5,
+            "order": 10,
         },
     )
     record_max: int = Field(
         default=50, ge=10,
         description="本地最多保留的记录条数。",
-        json_schema_extra={"hint": "超出后自动丢弃最旧记录。", "label": "记录条数上限", "order": 6, "step": 10},
+        json_schema_extra={"hint": "超出后自动丢弃最旧记录。", "label": "记录条数上限", "order": 11, "step": 10},
     )
 
 
