@@ -25,7 +25,7 @@ from maibot_sdk.types import HookMode
 from . import config as cfg_mod
 from .mailer import MailSender
 
-__version__ = "1.0.1"
+__version__ = "1.0.3"
 
 logger = logging.getLogger("plugin.WMX20081122.maibot-qq-monitor")
 
@@ -436,12 +436,14 @@ class QQMonitorPlugin(MaiBotPlugin):
     async def _on_received(self, **kwargs: Any) -> None:
         self._last_activity = time.time()
         self._fail_count = 0
-        # 顺带从消息报文里提取机器人自身 QQ，用于邮件/记录标识
+        # 从消息报文里取机器人自身 QQ：优先顶层 account_id，兼容旧版 additional_config
         try:
             msg = kwargs.get("message") or {}
-            mi = msg.get("message_info") or {}
-            ac = mi.get("additional_config") or {}
-            sid = ac.get("self_id") or mi.get("self_id") or msg.get("self_id")
+            sid = msg.get("account_id")
+            if not sid:
+                mi = msg.get("message_info") or {}
+                ac = mi.get("additional_config") or {}
+                sid = mi.get("self_id") or ac.get("self_id")
             if sid:
                 self._cached_self_id = str(sid).strip()
         except Exception:
@@ -451,18 +453,18 @@ class QQMonitorPlugin(MaiBotPlugin):
 
     @staticmethod
     def _extract_sender_id(kwargs: dict) -> str:
-        """取发送者 ID：优先命令参数里的 ``user_id``，再回退 ``message`` 报文。"""
-        sender = str(kwargs.get("user_id") or "").strip()
-        if sender:
-            return sender
+        """取发送者 ID。
+
+        运行时的命令调用参数里会直接带 ``user_id``（Host 侧 component_query 组装），
+        文档承诺的 ``message`` 报文里则是 ``message.message_info.user_info.user_id``。
+        """
         message = kwargs.get("message")
-        if not isinstance(message, dict):
-            return ""
-        info = message.get("message_info") or {}
-        user_info = info.get("user_info") if isinstance(info, dict) else None
-        if isinstance(user_info, dict):
-            return str(user_info.get("user_id") or "").strip()
-        return ""
+        if isinstance(message, dict):
+            info = message.get("message_info") or {}
+            user_info = info.get("user_info") if isinstance(info, dict) else None
+            if isinstance(user_info, dict) and user_info.get("user_id"):
+                return str(user_info["user_id"]).strip()
+        return str(kwargs.get("user_id") or "").strip()
 
     @Command(
         "在线状态",

@@ -6,7 +6,7 @@
 
 [![MaiBot](https://img.shields.io/badge/MaiBot-1.3.x-00a66a?style=flat-square)](https://github.com/Mai-with-u/MaiBot)
 [![SDK](https://img.shields.io/badge/SDK-2.12%2B-2f5fff?style=flat-square)](https://github.com/Mai-with-u/MaiBot)
-[![Version](https://img.shields.io/badge/version-1.0.2-orange?style=flat-square)](#)
+[![Version](https://img.shields.io/badge/version-1.0.3-orange?style=flat-square)](#)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 
 </div>
@@ -143,18 +143,27 @@ QQ 掉线常常同时伴随本机网络异常。插件已内置 0 / 10 / 30 / 60
 
 ## 🧱 环境要求
 
-- MaiBot ≥ 1.0.0，插件 SDK 2.x
-- 适配器插件 [`maibot-team.snowluma-adapter`](https://github.com/Mai-with-u/MaiBot-SnowLuma-Adapter)（通过 `ctx.api.call` 访问 NapCat 接口）
+- MaiBot ≥ 1.3.0（`_manifest.json` 声明区间 1.3.0 ~ 1.3.99），插件 SDK ≥ 2.12.0
+- 适配器插件 [`maibot-team.snowluma-adapter`](https://github.com/Mai-with-u/MaiBot-SnowLuma-Adapter)（通过 `ctx.api.call` 访问 NapCat 接口，依赖声明 `>=0.1.0,<2.0.0`）
 - 无需安装第三方 Python 包
 
+> 📌 MaiBot 发布 1.4 后我们会跟进测试并更新兼容区间。
+
 ## 📝 更新日志
+
+**v1.0.3**
+
+- 机器人自身 QQ 改从消息顶层 `account_id` 读取（`additional_config.self_id` 为旧版别名，仅作回退）
+- 发送者识别以 `message.message_info.user_info.user_id` 为主，`user_id` 参数兜底
+- `config.example.toml` 的 `http_probe_port` 默认改为 `0`（与 schema、README 一致，按需开启）
+- 适配器依赖补上界 `>=0.1.0,<2.0.0`，避免对方大版本改 API 后静默失效
+- 统一 `_manifest.json` / `plugin.py` / `__init__.py` 的版本号
 
 **v1.0.2**
 
 - WebUI 里关闭插件后再打开即刻恢复探测，不再需要重载插件
 - 卸载时取消未完成的邮件重试任务，避免重载后残留 pending task 告警
 - 统一触发指令默认值（插件内默认与 README / 示例配置一致）
-- 发送者识别改用文档承诺的 `message.message_base_info` 字段，保留旧字段回退
 - 版本区间声明收紧为 MaiBot 1.3.x + SDK 2.12.0（MaiBot 1.4 发布后会跟进测试与更新）
 
 **v1.0.1**

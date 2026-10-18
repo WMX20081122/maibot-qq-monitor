@@ -37,10 +37,11 @@ recover_success_threshold = 3
 recover_confirm_seconds = 20
 # N 秒内收到过消息则不判掉线（防误报；明确断开信号不受此限制）
 grace_seconds = 30
-# 判定掉线前的二次校验：直接连 NapCat HTTP 端口，可达说明只是调用卡顿
-# 填 NapCat 的 HTTP 端口（常见 2000 / 3000），填 0 关闭此校验
+# 判定掉线前的二次校验：直连 NapCat HTTP 端口，可达说明只是调用卡顿
+# 填 NapCat 的 HTTP 端口（常见 2000 / 3000）即启用，默认 0 表示关闭；
+# 只做本地 TCP 连通判断，不要指向内网其他服务或云元数据地址
 http_probe_host = "127.0.0.1"
-http_probe_port = 2000
+http_probe_port = 0
 # 每次重启 MaiBot 探测到在线时发送「上线」邮件，觉得吵可改 false
 notify_on_load = true
 # 本地最多保留记录条数
