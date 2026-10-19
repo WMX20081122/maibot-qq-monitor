@@ -204,10 +204,29 @@ class MonitorSection(PluginConfigBase):
             "order": 10,
         },
     )
+    liveness_enabled: bool = Field(
+        default=True,
+        description="活性探针：识别「僵尸在线」（NapCat 活着但 QQ 会话已死）。",
+        json_schema_extra={
+            "hint": "get_status 读的是 NapCat 本地缓存，QQ 会话断开时仍显示在线；探针定期用 no_cache 查询自身资料强制走腾讯服务器，连续失败即判定掉线。",
+            "label": "启用活性探针",
+            "order": 11,
+        },
+    )
+    liveness_interval: int = Field(
+        default=60, ge=15,
+        description="活性探针间隔（秒）。",
+        json_schema_extra={"hint": "探针会强制服务器往返，间隔不宜小于 15 秒。", "label": "探针间隔(s)", "order": 12, "step": 15},
+    )
+    liveness_fail_threshold: int = Field(
+        default=2, ge=1,
+        description="活性探针连续失败多少次判定掉线。",
+        json_schema_extra={"hint": "默认 2 次 × 60 秒 ≈ 掉线 2 分钟内告警。", "label": "探针失败阈值", "order": 13, "step": 1},
+    )
     record_max: int = Field(
         default=50, ge=10,
         description="本地最多保留的记录条数。",
-        json_schema_extra={"hint": "超出后自动丢弃最旧记录。", "label": "记录条数上限", "order": 11, "step": 10},
+        json_schema_extra={"hint": "超出后自动丢弃最旧记录。", "label": "记录条数上限", "order": 14, "step": 10},
     )
 
 

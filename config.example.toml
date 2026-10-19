@@ -43,6 +43,11 @@ http_probe_host = "127.0.0.1"
 http_probe_port = 0
 # 每次重启 MaiBot 探测到在线时发送「上线」邮件，觉得吵可改 false
 notify_on_load = true
+# 活性探针：NapCat 的 get_status 读本地缓存，QQ 会话断开后仍显示「在线」（僵尸在线）。
+# 探针定期用 no_cache 查询自身资料强制走一次腾讯服务器，连续失败即判定掉线并发邮件。
+liveness_enabled = true
+liveness_interval = 60
+liveness_fail_threshold = 2
 # 本地最多保留记录条数
 record_max = 50
 

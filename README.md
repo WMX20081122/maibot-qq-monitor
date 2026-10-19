@@ -6,7 +6,7 @@
 
 [![MaiBot](https://img.shields.io/badge/MaiBot-1.3.x-00a66a?style=flat-square)](https://github.com/Mai-with-u/MaiBot)
 [![SDK](https://img.shields.io/badge/SDK-2.12%2B-2f5fff?style=flat-square)](https://github.com/Mai-with-u/MaiBot)
-[![Version](https://img.shields.io/badge/version-1.0.4-orange?style=flat-square)](#)
+[![Version](https://img.shields.io/badge/version-1.0.5-orange?style=flat-square)](#)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 
 </div>
@@ -100,6 +100,9 @@ mail_to = "接收通知的邮箱@qq.com"
 | `monitor.grace_seconds` | `30` | 收到消息后 N 秒内不判掉线 |
 | `monitor.http_probe_host` / `http_probe_port` | `127.0.0.1` / `0` | 掉线前二次校验 NapCat 端口，填 0 关闭 |
 | `monitor.notify_on_load` | `true` | 重启后探测到在线是否发上线邮件 |
+| `monitor.liveness_enabled` | `true` | 活性探针开关（识别「僵尸在线」，见下文） |
+| `monitor.liveness_interval` | `60` | 探针间隔（秒），最小 15 |
+| `monitor.liveness_fail_threshold` | `2` | 探针连续失败几次判定掉线 |
 | `monitor.record_max` | `50` | 本地最多保留记录条数 |
 | `command.ps_command` | `["在线状态","上下线记录"]` | 查询指令（修改后需重载） |
 | `command.ps_only_su` | `true` | 查询指令是否仅管理员可用 |
@@ -135,6 +138,13 @@ QQ 掉线常常同时伴随本机网络异常。插件已内置 0 / 10 / 30 / 60
 </details>
 
 <details>
+<summary>什么是「僵尸在线」？为什么 NapCat 显示在线但机器人不回消息、也不发邮件？</summary>
+
+NapCat 进程活着、`get_status` 返回 `online: true`，但它底层的 QQ 会话已经断开——此时接口读的全是本地缓存，看起来一切正常。插件的**活性探针**（v1.0.5）专门对付这种情况：定期用 `no_cache` 查询机器人自己的资料，强制一次腾讯服务器往返；连续 `liveness_fail_threshold` 次失败（默认 2 次 × 60 秒）即判定掉线并发邮件，探针恢复后自动补发上线邮件。
+
+</details>
+
+<details>
 <summary>记录数据保存在哪？</summary>
 
 保存在 MaiBot 运行时分配给插件的数据目录（`monitor_records.json`），卸载/更新插件不会丢失；旧版本写在插件目录下的 `data/` 里，会按需自动迁移。
@@ -150,6 +160,11 @@ QQ 掉线常常同时伴随本机网络异常。插件已内置 0 / 10 / 30 / 60
 > 📌 MaiBot 发布 1.4 后我们会跟进测试并更新兼容区间。
 
 ## 📝 更新日志
+
+**v1.0.5**
+
+- 新增**活性探针**：识别「僵尸在线」——NapCat 进程与缓存接口都显示在线、但 QQ 会话实际已断开的情况；探针定期强制服务器往返，连续失败即发掉线邮件，恢复后补发上线邮件
+- 掉线/上线判定与探针互相门控，僵尸态下不再被缓存接口的假「在线」骗回上线
 
 **v1.0.4**
 

@@ -25,7 +25,7 @@ from maibot_sdk.types import HookMode
 from . import config as cfg_mod
 from .mailer import MailSender
 
-__version__ = "1.0.4"
+__version__ = "1.0.5"
 
 logger = logging.getLogger("plugin.WMX20081122.maibot-qq-monitor")
 
@@ -124,6 +124,10 @@ class QQMonitorPlugin(MaiBotPlugin):
         self._success_count: int = 0
         self._fail_since: float = 0.0
         self._recover_since: float = 0.0
+        self._liveness_task: asyncio.Task | None = None
+        self._liveness_ok: bool | None = None
+        self._liveness_fails: int = 0
+        self._zombie: bool = False
         self._records: List[dict] = []
         self._records_file: Path = Path(__file__).resolve().parent / "data" / "monitor_records.json"
         self._mailer: MailSender | None = None
@@ -155,16 +159,21 @@ class QQMonitorPlugin(MaiBotPlugin):
         self._last_activity = time.time()
         if self._probe_task is None or self._probe_task.done():
             self._probe_task = asyncio.create_task(self._probe_loop())
+        if self._liveness_task is None or self._liveness_task.done():
+            self._liveness_task = asyncio.create_task(self._liveness_loop())
         logger.info(
-            "QQ在线监控已加载：指令 %s，邮件发送 %s",
+            "QQ在线监控已加载：指令 %s，邮件发送 %s，活性探针 %s",
             " / ".join(cfg.command.ps_command),
             "开启" if (m.mail_enable and self._mailer.is_configured()) else "未配置",
+            "开启" if cfg.monitor.liveness_enabled else "关闭",
         )
 
     async def on_unload(self) -> None:
-        if self._probe_task is not None:
-            self._probe_task.cancel()
-            self._probe_task = None
+        for task in (self._probe_task, self._liveness_task):
+            if task is not None:
+                task.cancel()
+        self._probe_task = None
+        self._liveness_task = None
         for task in list(self._mail_tasks):
             task.cancel()
         if self._mail_tasks:
@@ -190,9 +199,14 @@ class QQMonitorPlugin(MaiBotPlugin):
                 self._last_activity = time.time()
                 self._probe_task = asyncio.create_task(self._probe_loop())
                 logger.info("QQ在线监控已启用，启动探测循环")
-        elif self._probe_task is not None:
-            self._probe_task.cancel()
-            self._probe_task = None
+            if self._liveness_task is None or self._liveness_task.done():
+                self._liveness_task = asyncio.create_task(self._liveness_loop())
+        else:
+            for attr in ("_probe_task", "_liveness_task"):
+                task = getattr(self, attr)
+                if task is not None:
+                    task.cancel()
+                    setattr(self, attr, None)
             logger.info("QQ在线监控已禁用，停止探测循环")
         logger.info("QQ在线监控配置已更新(%s)", version)
 
@@ -263,6 +277,89 @@ class QQMonitorPlugin(MaiBotPlugin):
             pass
         return True
 
+    # ---- 活性探针：识别「僵尸在线」 ----
+
+    async def _liveness_probe(self) -> tuple[bool, str]:
+        """用 no_cache 查询自身资料，强制一次腾讯服务器往返。
+
+        NapCat 的 get_status / get_login_info 读的是本地缓存，QQ 会话断开后
+        仍会返回在线；只有必须走服务器的接口才能暴露「进程活着但已掉线」。
+        """
+        self_id = str(getattr(self, "_cached_self_id", "") or "").strip()
+        if not self_id or self_id == "unknown":
+            return True, "self_id 未知，跳过活性探针"
+        try:
+            result = await asyncio.wait_for(
+                self.ctx.api.call(
+                    "adapter.napcat.account.get_stranger_info",
+                    user_id=self_id,
+                    no_cache=True,
+                ),
+                timeout=max(int(self.config.monitor.probe_timeout), 3) + 10,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            return False, f"异常: {_describe_exc(exc)}"
+        data = result.get("data") if isinstance(result, dict) else None
+        payload = data if isinstance(data, dict) else (result if isinstance(result, dict) else {})
+        if payload.get("error") or payload.get("success") is False:
+            return False, f"错误响应: {str(payload)[:200]}"
+        if str(payload.get("nickname") or payload.get("user_id") or "").strip():
+            return True, "服务器往返正常"
+        return False, f"无有效资料返回: {str(result)[:200]}"
+
+    async def _liveness_loop(self) -> None:
+        while True:
+            cfg = self.config
+            interval = max(int(cfg.monitor.liveness_interval), 15)
+            threshold = max(int(cfg.monitor.liveness_fail_threshold), 1)
+            await asyncio.sleep(interval)
+            if not cfg.plugin.enabled or not cfg.monitor.liveness_enabled:
+                self._liveness_ok = None
+                self._liveness_fails = 0
+                continue
+            try:
+                ok, detail = await self._liveness_probe()
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                logger.debug("活性探针异常", exc_info=True)
+                continue
+            if self._online is not True:
+                # 僵尸在线时缓存接口不可信，只有探针自己确认服务器恢复才算上线
+                if self._zombie and ok:
+                    self._zombie = False
+                    self._liveness_ok = True
+                    self._liveness_fails = 0
+                    self._online = True
+                    logger.info("活性探针确认服务器恢复，判定恢复上线，发送上线通知")
+                    await self._handle_event("online", notify_mail=True)
+                continue
+            if ok:
+                if self._liveness_ok is False:
+                    logger.info("活性探针恢复：%s", detail)
+                self._liveness_ok = True
+                self._liveness_fails = 0
+                continue
+            self._liveness_fails += 1
+            logger.warning(
+                "活性探针失败 %d/%d（NapCat 显示在线但服务器往返异常）：%s",
+                self._liveness_fails,
+                threshold,
+                detail,
+            )
+            if self._liveness_fails < threshold:
+                continue
+            self._liveness_ok = False
+            self._last_probe_detail = f"活性探针 -> {detail}"
+            logger.warning("判定僵尸在线（QQ 会话已断开），发送掉线通知")
+            self._online = False
+            self._zombie = True
+            self._fail_count = 0
+            self._fail_since = 0.0
+            await self._handle_event("offline", notify_mail=True)
+
     async def _probe_loop(self) -> None:
         delay = 0.0  # 首轮立即探测，尽快确定初始状态
         while True:
@@ -290,6 +387,10 @@ class QQMonitorPlugin(MaiBotPlugin):
 
             now = time.time()
             if online:
+                if self._zombie:
+                    # 僵尸在线期间缓存接口的「在线」不可信，恢复判定交给活性探针
+                    delay = interval
+                    continue
                 self._fail_count = 0
                 self._fail_since = 0.0
                 if self._online is True:
@@ -472,13 +573,10 @@ class QQMonitorPlugin(MaiBotPlugin):
     async def _on_received(self, **kwargs: Any) -> None:
         self._last_activity = time.time()
         self._fail_count = 0
-        # 从消息报文里取机器人自身 QQ：优先顶层 account_id，兼容旧版 additional_config
+        # 从消息报文顶层 account_id 取机器人自身 QQ（用于邮件/记录标识）
         try:
             msg = kwargs.get("message") or {}
             sid = msg.get("account_id")
-            if not sid:
-                mi = msg.get("message_info") or {}
-                sid = (mi.get("additional_config") or {}).get("self_id")
             if sid:
                 self._cached_self_id = str(sid).strip()
         except Exception:
@@ -488,18 +586,14 @@ class QQMonitorPlugin(MaiBotPlugin):
 
     @staticmethod
     def _extract_sender_id(kwargs: dict) -> str:
-        """取发送者 ID。
-
-        运行时的命令调用参数里会直接带 ``user_id``（Host 侧 component_query 组装），
-        文档承诺的 ``message`` 报文里则是 ``message.message_info.user_info.user_id``。
-        """
+        """取发送者 ID：``message.message_info.user_info.user_id``（文档承诺的报文字段）。"""
         message = kwargs.get("message")
         if isinstance(message, dict):
             info = message.get("message_info") or {}
             user_info = info.get("user_info") if isinstance(info, dict) else None
             if isinstance(user_info, dict) and user_info.get("user_id"):
                 return str(user_info["user_id"]).strip()
-        return str(kwargs.get("user_id") or "").strip()
+        return ""
 
     @Command(
         "在线状态",
@@ -508,10 +602,10 @@ class QQMonitorPlugin(MaiBotPlugin):
     )
     async def cmd_status(self, stream_id: str = "", **kwargs: Any) -> tuple:
         if not stream_id:
-            return True, None, 0
+            return True, "", 0
         if not self.config.plugin.enabled:
             await self.ctx.send.text("QQ在线监控当前已禁用", stream_id)
-            return True, None, 0
+            return True, "", 0
 
         sender_id = self._extract_sender_id(kwargs)
 
@@ -519,7 +613,7 @@ class QQMonitorPlugin(MaiBotPlugin):
             su = set(str(x).strip() for x in self.config.admin.superusers)
             if sender_id not in su:
                 await self.ctx.send.text("你没有使用此指令的权限", stream_id)
-                return True, None, 0
+                return True, "", 0
 
         lines = []
         # 当前状态
@@ -547,7 +641,7 @@ class QQMonitorPlugin(MaiBotPlugin):
             lines.append("（暂无掉线记录）")
 
         await self.ctx.send.text("\n".join(lines), stream_id)
-        return True, None, 0
+        return True, "", 0
 
     # ---- 记录持久化 ----
 
