@@ -66,7 +66,12 @@ def _login_info_is_online(result: Any) -> bool | None:
 
 
 def _status_verdict(result: Any) -> bool | None:
-    """从 get_status 提取在线判定：online 与 good 同时为真才算在线，无标志返回 None。"""
+    """从 get_status 提取在线判定。
+
+    注意：实测 SnowLuma 网关上 ``online=False`` 会误报——机器人正常收发消息时
+    该标志仍可能为 False。因此只有 ``good=False``（连接确实断开）才判定掉线；
+    单独的 ``online=False`` 视为「无法判定」，交给活性探针做服务器往返确认。
+    """
     if not isinstance(result, dict) or not result:
         return None
     if result.get("error") or result.get("success") is False:
@@ -75,9 +80,15 @@ def _status_verdict(result: Any) -> bool | None:
         if not isinstance(flags, dict):
             continue
         if "online" in flags:
-            return bool(flags.get("online")) and bool(flags.get("good", True))
+            if bool(flags.get("online")):
+                return True
+            # online=False 不足以判定掉线，只有 good=False 才说明连接真断了
+            if "good" in flags and not bool(flags.get("good")):
+                return False
+            return None
         if "good" in flags:
-            return bool(flags.get("good"))
+            # 只有 good 字段时：good=True 说明服务正常，无法反推 QQ 在线
+            return None if bool(flags.get("good")) else False
     return None
 
 
@@ -88,7 +99,27 @@ def _describe_exc(exc: BaseException) -> str:
     return f"{name}: {text}" if text else name
 
 
+def _fmt_duration(seconds: float) -> str:
+    """把秒数转成「X 小时 Y 分钟」这种可读文本。"""
+    seconds = int(max(0, seconds))
+    if seconds < 60:
+        return f"{seconds} 秒"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes} 分钟"
+    hours = minutes // 60
+    rest = minutes % 60
+    if hours < 24:
+        return f"{hours} 小时 {rest} 分钟" if rest else f"{hours} 小时"
+    days = hours // 24
+    rest_h = hours % 24
+    return f"{days} 天 {rest_h} 小时" if rest_h else f"{days} 天"
+
+
 HARD_OFFLINE_MARKERS = (
+    # 只保留「连接确实断开」的语义。
+    # 注意：不要再把「未找到 api 提供方插件」当明确掉线——那是适配器插件
+    # 重载/未就绪，QQ 侧完全在线，误判会导致每次重载都发一对上下线邮件。
     "not connected",
     "not_connected",
     "未连接",
@@ -97,9 +128,6 @@ HARD_OFFLINE_MARKERS = (
     "connection refused",
     "拒绝网络连接",
     "cannot connect",
-    "未找到 api 提供方",
-    "api provider",
-    "api 提供方插件",
 )
 
 
@@ -119,6 +147,8 @@ class QQMonitorPlugin(MaiBotPlugin):
     def __init__(self) -> None:
         super().__init__()
         self._online: bool | None = None  # True=在线 False=掉线 None=未知
+        # 状态是从磁盘恢复的（可能是上次的误判），首次确认只记录不发邮件
+        self._state_restored: bool = False
         self._last_activity: float = 0.0
         self._fail_count: int = 0
         self._success_count: int = 0
@@ -241,7 +271,7 @@ class QQMonitorPlugin(MaiBotPlugin):
             if verdict is True:
                 return True, False
             if verdict is False:
-                # online=False（账号被踢下线）等明确标志：直接采信并立即判定
+                # 只有 good=False 这类「连接确实断开」才立即采信
                 return False, True
             if _is_hard_offline_signal(result):
                 hard_offline = True
@@ -393,27 +423,34 @@ class QQMonitorPlugin(MaiBotPlugin):
                     continue
                 self._fail_count = 0
                 self._fail_since = 0.0
-                if self._online is True:
+                # 已在线且不是「刚从磁盘恢复」的状态：无需再确认
+                if self._online is True and not self._state_restored:
                     self._success_count = 0
                     self._recover_since = 0.0
                     delay = interval
                     continue
-                # 首次判定与掉线恢复共用同一套「稳定多久才算数」的确认逻辑
+                # 首次判定、掉线恢复、加载后首次确认，共用同一套「稳定多久才算数」的逻辑
                 if self._recover_since <= 0:
                     self._recover_since = now
                 self._success_count += 1
                 stable = now - self._recover_since
                 if self._success_count >= recover_threshold and stable >= recover_confirm:
-                    first = self._online is None
+                    # 恢复出来的旧状态可能是误判：首次确认只记录，不发邮件
+                    first = self._online is None or self._state_restored
+                    self._state_restored = False
                     self._success_count = 0
                     self._recover_since = 0.0
                     self._online = True
                     delay = interval
-                    if first and not cfg.monitor.notify_on_load:
-                        self._record_event("online")
+                    if first:
+                        if cfg.monitor.notify_on_load:
+                            logger.info("加载后首次确认在线（稳定 %d 秒），发送上线通知", int(stable))
+                            await self._handle_event("online", notify_mail=True, reason="load")
+                        else:
+                            self._record_event("online")
+                            self._save_state()
                     else:
-                        if not first:
-                            logger.info("稳定 %d 秒探测成功，判定恢复上线，发送上线通知", int(stable))
+                        logger.info("稳定 %d 秒探测成功，判定恢复上线，发送上线通知", int(stable))
                         await self._handle_event("online", notify_mail=True)
                 else:
                     delay = retry_interval  # 仍在确认期，短间隔复检
@@ -421,8 +458,10 @@ class QQMonitorPlugin(MaiBotPlugin):
                 self._success_count = 0
                 self._recover_since = 0.0
                 idle_for = now - self._last_activity
-                # 宽限期仅对「模糊失败」生效；明确断开说明连接已断，不必再等
-                if not hard_offline and self._online is not False and idle_for < grace:
+                # 最近还有消息往来 = QQ 侧明显在线，接口报什么都不能判掉线
+                recent_activity = idle_for < grace
+                # 宽限期：模糊失败一定等；明确断开也要等，除非确实很久没消息
+                if self._online is not False and recent_activity:
                     logger.info(
                         "探测失败但仍在消息宽限期（距判定掉线还需 %.0f 秒）。详情: %s",
                         grace - idle_for,
@@ -448,12 +487,38 @@ class QQMonitorPlugin(MaiBotPlugin):
                     self._last_probe_detail,
                 )
                 if notifying:
-                    # 判定前再确认 NapCat 端口：接口卡顿不该被当成掉线
+                    # 二次校验 1：NapCat 端口可达 → 只是调用通道卡顿
                     if not immediate and await self._napcat_port_reachable():
                         logger.info("二次校验：NapCat 端口可达，判定为调用通道抖动，暂不发掉线通知")
                         self._fail_count = 0
                         self._fail_since = 0.0
                         delay = interval
+                        continue
+                    # 二次校验 2：活性探针走一次真实服务器往返。
+                    # 能查到自己资料说明 QQ 会话确实在线，任何接口标志都不足信。
+                    try:
+                        alive, live_detail = await self._liveness_probe()
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        alive, live_detail = False, "探针异常"
+                    if alive:
+                        logger.info(
+                            "二次校验：活性探针成功（%s），判定为误报，暂不发掉线通知",
+                            live_detail,
+                        )
+                        self._fail_count = 0
+                        self._fail_since = 0.0
+                        delay = interval
+                        continue
+                    # 恢复出来的旧状态首次确认只记录，不补发掉线邮件
+                    if self._state_restored:
+                        self._state_restored = False
+                        self._online = False
+                        self._record_event("offline")
+                        self._save_state()
+                        logger.info("重载后首次判定掉线，仅记录不发送邮件")
+                        delay = retry_interval
                         continue
                     self._online = False
                     logger.warning("判定掉线，发送掉线通知。探测详情: %s", self._last_probe_detail)
@@ -485,7 +550,12 @@ class QQMonitorPlugin(MaiBotPlugin):
         return self._records_file.with_name("monitor_state.json")
 
     def _load_state(self) -> None:
-        """恢复上次判定的在线状态：重启时若本来就掉线，不再重复发一封掉线邮件。"""
+        """恢复上次判定的在线状态：重启时若本来就掉线，不再重复发一封掉线邮件。
+
+        注意：恢复出来的只是「上次的判定结果」，可能是误判。重载后第一次确认
+        到状态只记录、不发邮件（见 _probe_loop），避免每次重载都补发一封
+        「恢复上线」，把误判的影响放大成一封额外的邮件。
+        """
         try:
             raw = json.loads(self._state_file().read_text(encoding="utf-8"))
         except Exception:
@@ -493,6 +563,7 @@ class QQMonitorPlugin(MaiBotPlugin):
         online = raw.get("online") if isinstance(raw, dict) else None
         if isinstance(online, bool):
             self._online = online
+            self._state_restored = True
             logger.info("恢复上次在线状态：%s", "在线" if online else "掉线")
 
     def _save_state(self) -> None:
@@ -512,43 +583,83 @@ class QQMonitorPlugin(MaiBotPlugin):
         except Exception:
             logger.debug("保存在线状态失败", exc_info=True)
 
-    async def _handle_event(self, evt: str, notify_mail: bool) -> None:
-        """记录事件并按「每次状态翻转一封」直接发邮件（翻转已由阈值防抖）。"""
+    async def _handle_event(
+        self, evt: str, notify_mail: bool, *, reason: str = ""
+    ) -> None:
+        """记录事件并按「每次状态翻转一封」直接发邮件（翻转已由阈值防抖）。
+
+        reason="load" 表示这是插件/宿主刚加载后的首次确认，不是状态翻转，
+        邮件标题会标出来，避免和真正的「掉线后恢复」混淆。
+        """
         self._record_event(evt)
         if not notify_mail or not self.config.mail.mail_enable:
             return
-        self._spawn_mail(evt)
+        self._spawn_mail(evt, reason)
 
-    def _spawn_mail(self, evt: str) -> None:
+    def _spawn_mail(self, evt: str, reason: str = "") -> None:
         """后台发送通知邮件，避免 SMTP 耗时阻塞探测循环。"""
-        task = asyncio.create_task(self._send_event_mail(evt))
+        task = asyncio.create_task(self._send_event_mail(evt, reason))
         self._mail_tasks.add(task)
         task.add_done_callback(self._mail_tasks.discard)
 
-    async def _send_event_mail(self, evt: str) -> None:
+    async def _send_event_mail(self, evt: str, reason: str = "") -> None:
         """构造并发送上线/掉线通知邮件。"""
         try:
             nick = next(iter(self.config.admin.nickname), None) or "Bot"
             self_id = self._resolve_self_id()
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             if evt == "online":
-                subject = f"Bot 已上线（{now}）"
-                body = (
-                    f"机器人已恢复在线。\n\n"
-                    f"时间：{now}\n昵称：{nick}\nQQ：{self_id}\n"
-                    f"状态：🟢 在线"
-                )
+                if reason == "load":
+                    subject = f"【已上线·插件加载】{now}"
+                    body = (
+                        f"插件已加载，机器人当前在线。\n\n"
+                        f"时间：{now}\n昵称：{nick}\nQQ：{self_id}\n"
+                        f"状态：🟢 在线（加载后首次确认）"
+                    )
+                else:
+                    subject = f"【已上线】{now}"
+                    body = (
+                        f"机器人已恢复在线。\n\n"
+                        f"时间：{now}\n昵称：{nick}\nQQ：{self_id}\n"
+                        f"状态：🟢 在线"
+                    )
             else:
-                subject = f"Bot 已掉线（{now}）"
+                subject = f"【已掉线】{now}"
                 body = (
                     f"机器人已掉线！\n\n"
                     f"时间：{now}\n昵称：{nick}\nQQ：{self_id}\n"
                     f"状态：🔴 掉线\n"
                     f"请尽快检查 NapCat / 网络连接。"
                 )
+            # 加载通知不是状态翻转，不附带「上一状态持续多久」
+            last_for = "" if reason == "load" else self._last_state_duration()
+            if last_for:
+                subject = f"{subject}｜{last_for}"
+                body = f"{body}\n{last_for}"
             await self._mailer.send(subject, body)
         except Exception:
             logger.exception("发送 %s 通知邮件失败", evt)
+
+    def _last_state_duration(self) -> str:
+        """上一状态持续了多久，帮助判断这次翻转是否值得关注。"""
+        if len(self._records) < 2:
+            return ""
+        try:
+            prev = self._records[-2]
+            cur = self._records[-1]
+            from datetime import datetime as _dt
+
+            fmt = "%Y-%m-%d %H:%M:%S"
+            delta = (_dt.strptime(cur["time"], fmt) - _dt.strptime(prev["time"], fmt)).total_seconds()
+            if delta < 0:
+                return ""
+            if prev["type"] == "offline":
+                text = f"掉线持续 {_fmt_duration(delta)}"
+            else:
+                text = f"在线持续 {_fmt_duration(delta)}"
+            return f"（上一状态：{text}）"
+        except Exception:
+            return ""
 
     def _resolve_records_file(self) -> Path:
         """记录写入运行时分配的统一数据目录，避免落在插件源码目录内。"""

@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "id": "WMX20081122.maibot-qq-monitor",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "name": "QQ在线监控",
   "description": "监测机器人 QQ 上线/掉线状态：状态翻转时通过 QQ 邮箱 SMTP 发送邮件通知，群聊/私聊发送「在线状态」可查看最新登录与掉线记录。",
   "author": {
